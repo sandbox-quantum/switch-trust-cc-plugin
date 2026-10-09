@@ -360,7 +360,8 @@ def test_health_file_is_owner_only_and_has_no_key(monkeypatch, tmp_path) -> None
     upload.post_event_status("http://127.0.0.1:1", "sk_test_secretvalue", b"x")
 
     path = tmp_path / "state" / "health.json"
-    assert os.stat(path).st_mode & 0o777 == 0o600
+    if sys.platform != "win32":
+        assert os.stat(path).st_mode & 0o777 == 0o600
     assert "secretvalue" not in path.read_text()
 
 

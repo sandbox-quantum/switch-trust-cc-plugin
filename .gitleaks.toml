@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secret fixtures used to test hooks/ccusage/redact.py's redaction patterns -- not real credentials"
+paths = [
+    '''tests/test_redact\.py''',
+    '''tests/test_reporter\.py''',
+    '''tests/test_upload\.py''',
+]

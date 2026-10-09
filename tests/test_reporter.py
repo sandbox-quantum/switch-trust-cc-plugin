@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+import pytest
+
 _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 if _HOOKS_DIR not in sys.path:
     sys.path.insert(0, _HOOKS_DIR)
@@ -222,6 +224,11 @@ def test_budget_caps_timeout_and_skips_post_that_cannot_fit(monkeypatch) -> None
     assert budget.post_timeout() is None
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits (0600) don't exist on Windows; os.chmod "
+    "there only toggles a read-only attribute.",
+)
 def test_fallback_log_tightens_existing_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
     log_file = tmp_path / "ccusage.log"

@@ -36,6 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # @anthropic-ai/claude-code declares "engines": {"node": ">=22.0.0"}.
+      # On an older Node, `npm install -g` with no version pin silently
+      # resolves the newest version whose declared engines are satisfied
+      # instead of @latest -- not an error, so this fails quietly rather
+      # than loudly. That stale version didn't yet recognize this plugin's
+      # userConfig `options` key, so keep node-version >= 22 here.
+      CLAUDE_CODE_VERSION: 2.1.295
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -43,10 +51,10 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
       - name: Validate plugin manifest
         run: claude plugin validate --strict .
