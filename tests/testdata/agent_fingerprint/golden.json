@@ -1,0 +1,21 @@
+{
+  "_comment": "Cross-language golden vectors for the shared agent fingerprint. Both Python (parser_utils.generate_agent_fingerprint) and Go (ids.AgentFingerprint) must reproduce expected_fingerprint. Agent names are case-sensitive (no lowercasing).",
+  "vectors": [
+    {
+      "name": "weather_time_agent",
+      "expected_fingerprint": "agn_64c111015e5c47cabbb1d987a1663eeb"
+    },
+    {
+      "name": "stock_agent",
+      "expected_fingerprint": "agn_b03fb7141133672b4bac559a71f314d3"
+    },
+    {
+      "name": "MyAssistant",
+      "expected_fingerprint": "agn_39f05f0720f173a2c0fae55213de4516"
+    },
+    {
+      "name": "agent-with-dashes",
+      "expected_fingerprint": "agn_0fbd4bce7d760d16539a78c4402c818e"
+    }
+  ]
+}

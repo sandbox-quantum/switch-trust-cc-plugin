@@ -1,0 +1,43 @@
+{
+  "name": "switch-trust-cc-plugin",
+  "version": "0.2.0",
+  "description": "Claude Code plugin for the Switch Trust platform. Reports Claude Code usage & computed cost to Switch Trust for cost tracking and further analysis.",
+  "author": {
+    "name": "SandboxAQ"
+  },
+  "homepage": "https://github.com/sandbox-quantum/switch-trust-cc-plugin",
+  "repository": "https://github.com/sandbox-quantum/switch-trust-cc-plugin",
+  "license": "LicenseRef-SandboxAQ-Commons-Clause",
+  "privacyPolicyUrl": "https://www.sandboxaq.com/legal/privacy-policy",
+  "termsOfServiceUrl": "https://switchagents.ai/legal/terms-of-service",
+  "supportUrl": "https://github.com/sandbox-quantum/switch-trust-cc-plugin/issues",
+  "keywords": ["switch-trust", "cost-tracking", "observability", "roi", "usage-reporting"],
+  "userConfig": {
+    "switch_trust_api_key": {
+      "type": "string",
+      "title": "Switch Trust API Key",
+      "description": "Your Switch Trust API key (sk_...). Determines which tenant/workspace usage is reported to.",
+      "sensitive": true,
+      "required": true
+    },
+    "switch_trust_environment": {
+      "type": "string",
+      "title": "Switch Trust Ingestion Endpoint",
+      "description": "Base URL of the Switch Trust ingestion service. Leave as the default unless directed to use staging or a local endpoint.",
+      "default": "https://ingestion.switchagents.ai"
+    },
+    "switch_trust_mode": {
+      "type": "string",
+      "title": "Report Mode",
+      "description": "How much conversation detail to report. Default is full (real prompts, responses, and tool calls/results — needed for Switch Trust's ROI recommendations). condensed sends token counts only, text adds prompt/response text, none disables reporting.",
+      "options": ["condensed", "text", "full", "none"],
+      "default": "full"
+    },
+    "switch_trust_user_email": {
+      "type": "string",
+      "title": "User Email Override",
+      "description": "Override the per-user identity used for attribution. Leave unset to auto-detect locally (git config user.email, then OS login name) -- no cloud credentials are used.",
+      "required": false
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "switch-trust-cc-plugins",
+  "description": "Claude Code plugins for the Switch Trust platform.",
+  "owner": {
+    "name": "SandboxAQ"
+  },
+  "plugins": [
+    {
+      "name": "switch-trust-cc-plugin",
+      "description": "Claude Code plugin for the Switch Trust platform. Reports Claude Code usage & computed cost to Switch Trust for cost tracking and further analysis.",
+      "category": "observability",
+      "source": "."
+    }
+  ]
+}

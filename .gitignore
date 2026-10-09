@@ -1,0 +1,8 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local secrets/config (the plugin reads this at runtime; never commit it)
+.env
+
+.DS_Store
