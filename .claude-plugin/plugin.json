@@ -9,7 +9,7 @@
   "repository": "https://github.com/sandbox-quantum/switch-trust-cc-plugin",
   "license": "LicenseRef-SandboxAQ-Commons-Clause",
   "privacyPolicyUrl": "https://www.sandboxaq.com/legal/privacy-policy",
-  "termsOfServiceUrl": "https://switchagents.ai/legal/terms-of-service",
+  "termsOfServiceUrl": "https://www.sandboxaq.com/legal/eula",
   "supportUrl": "https://github.com/sandbox-quantum/switch-trust-cc-plugin/issues",
   "keywords": ["switch-trust", "cost-tracking", "observability", "roi", "usage-reporting"],
   "userConfig": {
@@ -32,6 +32,13 @@
       "description": "How much conversation detail to report. Default is full (real prompts, responses, and tool calls/results — needed for Switch Trust's ROI recommendations). condensed sends token counts only, text adds prompt/response text, none disables reporting.",
       "options": ["condensed", "text", "full", "none"],
       "default": "full"
+    },
+    "switch_trust_pii_redaction": {
+      "type": "string",
+      "title": "PII Redaction",
+      "description": "Best-effort redaction of structured personal data before upload. default replaces payment cards, US SSNs, IBANs, and passport, driver's licence, medical-record numbers and dates of birth next to a label; strict also replaces phone numbers; off keeps credential redaction only. A project's settings can only make this stricter.",
+      "options": ["default", "strict", "off"],
+      "default": "default"
     },
     "switch_trust_user_email": {
       "type": "string",

@@ -31,6 +31,7 @@ from .fingerprints import (
     make_model_fingerprint,
 )
 from .identity import slot_id
+from .pii import PiiRedactor
 from .redact import nul_free, redact, sanitize_turn
 from .transcript import TranscriptBucket, TranscriptTurn
 
@@ -149,14 +150,17 @@ def build_app_info(repo_name: str, repo_url: str) -> bytes:
     return body
 
 
-def build_prompt_text(title: str, repo_name: str, branch: str | None) -> str:
+def build_prompt_text(
+    title: str, repo_name: str, branch: str | None, pii: PiiRedactor | None = None
+) -> str:
     """Combine repo/branch/title into the single string sent as `prompt`.
 
     See README's "Why repo/branch/title all ride in prompt" for why `response`
     is always left empty instead.
     """
-    title, repo_name = redact(title), redact(repo_name)
-    location = f"{repo_name}:{redact(branch)}" if branch else repo_name
+    pii = pii if pii is not None else PiiRedactor()
+    title, repo_name = redact(title, pii), redact(repo_name, pii)
+    location = f"{repo_name}:{redact(branch, pii)}" if branch else repo_name
     return f"{title} ({location})"
 
 
@@ -170,20 +174,22 @@ def build_llm_interaction(
     repo_url: str,
     branch: str | None = None,
     window_start: str | None = None,
+    pii: PiiRedactor | None = None,
 ) -> bytes:
     """Build the LlmInteraction for one model's slice of a transcript delta."""
     session_id, model_name, agent_name, title, repo_name, repo_url = map(
         nul_free, (session_id, model_name, agent_name, title, repo_name, repo_url)
     )
     branch = nul_free(branch) if branch else branch
+    pii = pii if pii is not None else PiiRedactor()
     fp = condensed_fingerprint(session_id, model_name, window_start)
     body = wire.string_field(1, fp)
     body += wire.timestamp_field(2, bucket["last_seconds"], bucket["last_nanos"])
     body += wire.message_field(3, build_model(model_name))
     body += wire.message_field(
-        5, build_content(build_prompt_text(title, repo_name, branch))
+        5, build_content(build_prompt_text(title, repo_name, branch, pii))
     )
-    body += wire.message_field(11, build_app_info(repo_name, repo_url))
+    body += wire.message_field(11, build_app_info(redact(repo_name, pii), repo_url))
     body += wire.varint_field(12, INTERACTION_TYPE_MESSAGE)
     body += wire.message_field(13, build_usage(bucket["eff_input"], bucket["output"]))
     body += wire.string_field(17, session_id)
@@ -198,14 +204,16 @@ def build_llm_interaction_turn(
     repo_name: str,
     repo_url: str,
     sequence_number: int,
+    pii: PiiRedactor | None = None,
 ) -> bytes:
     """Build the LlmInteraction for one conversation turn (report modes text/full)."""
     session_id, agent_name, repo_name, repo_url = map(
         nul_free, (session_id, agent_name, repo_name, repo_url)
     )
     model_name = nul_free(turn["model"])
+    pii = pii if pii is not None else PiiRedactor()
     prompt_blocks, response_blocks = sanitize_turn(
-        turn["prompt_blocks"], turn["response_blocks"]
+        turn["prompt_blocks"], turn["response_blocks"], pii
     )
     fp = interaction_fingerprint(session_id, model_name, turn["uuid"])
     body = wire.string_field(1, fp)
@@ -213,7 +221,7 @@ def build_llm_interaction_turn(
     body += wire.message_field(3, build_model(model_name))
     body += wire.message_field(5, build_turn_content(prompt_blocks, ROLE_USER))
     body += wire.message_field(6, build_turn_content(response_blocks, ROLE_ASSISTANT))
-    body += wire.message_field(11, build_app_info(repo_name, repo_url))
+    body += wire.message_field(11, build_app_info(redact(repo_name, pii), repo_url))
     body += wire.varint_field(12, INTERACTION_TYPE_MESSAGE)
     body += wire.message_field(13, build_usage(turn["eff_input"], turn["output"]))
     body += wire.string_field(14, session_id)

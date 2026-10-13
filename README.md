@@ -19,7 +19,8 @@ Claude Code will prompt you for the settings below — enter at least your
 Switch Trust API Key. You can revisit these any time via `/config`; your key is
 stored in your OS's secure credential store, never in plaintext. These
 settings come from `/config` only — a repository you open can only lower the
-Report Mode (never raise it, or change your key, endpoint or identity).
+Report Mode or make PII Redaction stricter (never the reverse, or change your
+key, endpoint or identity).
 
 | Setting | Required | Description |
 | --- | --- | --- |
@@ -27,6 +28,7 @@ Report Mode (never raise it, or change your key, endpoint or identity).
 | Switch Trust Ingestion Endpoint | no | URL of the ingestion service (defaults to production instance). Must be `https://` on an allowed Switch Trust host, or `http://localhost` / `http://127.0.0.1` for local development — anything else is refused and logged, never sent. |
 | User Email Override | no | Override the per-user identity used for attribution (else auto-detected locally: `git config user.email` → OS login name; no cloud credentials are used — see [Data & Privacy](#data--privacy)) |
 | Report Mode | no | `condensed`, `text`, `full` (default), or `none` (disables reporting) — see [Report modes](#report-modes) |
+| PII Redaction | no | `default` (default), `strict`, or `off` — best-effort replacement of card numbers, US SSNs, IBANs and labelled IDs; see [PII redaction](#pii-redaction) |
 
 - Hooks and the `/switch-trust-status` command activate as soon as the install
   finishes. If the install summary asks you to, run `/reload-plugins` (a full
@@ -93,6 +95,41 @@ The **Report Mode** setting controls how much conversation detail is sent.
 See [Data & Privacy](#data--privacy) below for exactly what each mode sends
 and why `full` is the default.
 
+## PII redaction
+
+Before anything is sent, the plugin also replaces structured personal data on
+your machine, in every mode (including the `condensed` title, repo and branch
+string). This is pattern-based and **best-effort**: it reduces exposure, it
+does not guarantee removal. The **PII Redaction** setting
+(`switch_trust_pii_redaction`, set via `/config`) chooses what is replaced:
+
+| Setting | What's replaced |
+| --- | --- |
+| `default` | **Payment card numbers** with a known issuer prefix (Visa, Mastercard, Amex, Discover) and a valid Luhn check digit — in prose, CSV, SQL and JSON, including JSON numbers. **US Social Security numbers** in `123-45-6789` form that pass the SSA validity rules, or as 9 digits right after a label such as `SSN`, `social security number`, `taxpayer_id` or `TIN`, or under such a JSON key. **IBANs** with a valid checksum. **Passport, driver's licence and medical-record numbers, and dates of birth**, only right after a label such as `passport no.`, `driver's license`, `MRN`, `DOB` or `date of birth`, or under a matching JSON key in tool input. |
+| `strict` | Everything in `default`, plus phone numbers in `+<country code><number>` form and phone numbers right after a label such as `phone`, `mobile` or `fax`. |
+| `off` | Nothing. Secret redaction still applies. |
+
+Each value is replaced with a numbered placeholder such as `[card-1]` or
+`[ssn-2]`. Within one report (everything one hook run sends) the same value
+gets the same placeholder and different values get different ones, so repeated tool calls can still be told
+apart. Placeholders are plain sequence numbers, not hashes, so they cannot be
+reversed; numbering restarts with each report.
+
+It does **not** detect: names, email addresses, postal addresses, phone
+numbers (outside `strict`), national ID numbers from countries other than
+the US, ID numbers and dates of birth with no label next to them, or values
+split up or obfuscated. **Free-text special-category data — health
+conditions, religion, political opinions, ethnicity, sexual orientation — is
+not detected at all**; patterns cannot recognize it reliably. It also
+replaces some look-alikes: well-known test card numbers, about 2–3% of
+random 16-digit order numbers, most values shaped like `123-45-6789` (such as
+part numbers), unless a label such as `order id` or `part` sits right before
+them, and card-like digit runs inside mostly-numeric hex IDs (an instance ID
+such as `i-4743355369860f07b` can become `i-[card-1]f07b`).
+
+A repository you open can make this setting stricter, but never lower it or
+turn it off.
+
 ## Data & Privacy
 
 This is usage reporting, not anonymous telemetry — it is attributed to you
@@ -111,8 +148,9 @@ no real conversation text.
 each turn. `full` also includes tool calls and tool results — commands run,
 file contents, and other tool output — as they appear in the transcript,
 including any third-party data that happens to be in them. Redaction of
-recognizable secrets is best-effort — it reduces exposure, it does not
-guarantee removal.
+recognizable secrets and of structured personal data (see
+[PII redaction](#pii-redaction)) is best-effort — it reduces exposure, it
+does not guarantee removal.
 
 **`full` is the default mode, and it sends real conversation content** — prompts,
 responses, and tool inputs/outputs such as shell commands and file contents.
@@ -153,12 +191,14 @@ to look this up.
 information, payment-card data, government ID numbers, or other
 special-category personal data through this plugin. In `full` mode (the
 default), the plugin forwards whatever text appears in the files and command
-output it is shown, with no content-aware filtering — only pattern-based
-secret redaction, which is best-effort. If your repository or shell output
-may contain any of this data, use `condensed` or `text` mode, or `none`.
+output it is shown, filtered only by best-effort, pattern-based redaction of
+secrets and of the structured personal data listed in
+[PII redaction](#pii-redaction). Free-text health or other special-category
+data is not detected. If your repository or shell output may contain any of
+this data, use `condensed` or `text` mode, or `none`.
 
 **More:** [Privacy Policy](https://www.sandboxaq.com/legal/privacy-policy),
-[Terms of Service](https://switchagents.ai/legal/terms-of-service),
+[Terms of Service](https://www.sandboxaq.com/legal/eula),
 [Data Handling](https://docs.switchagents.ai/switch-trust/resources/data-handling),
 [Data Protection Addendum](https://docs.switchagents.ai/switch-trust/resources/dpa).
 

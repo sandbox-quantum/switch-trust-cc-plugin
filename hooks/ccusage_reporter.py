@@ -49,6 +49,9 @@ if TYPE_CHECKING:
         OPTION_SWITCH_TRUST_API_KEY,
         OPTION_SWITCH_TRUST_ENVIRONMENT,
         OPTION_SWITCH_TRUST_MODE,
+        OPTION_SWITCH_TRUST_PII_REDACTION,
+        PII_REDACTION_DEFAULT,
+        PII_REDACTION_LEVELS,
         REPORT_MODE_CONDENSED,
         REPORT_MODE_FULL,
         REPORT_MODE_NONE,
@@ -60,6 +63,8 @@ if TYPE_CHECKING:
         build_llm_interaction_turn,
     )
     from ccusage.log import log, log_path
+    from ccusage.pii import PiiRedactor
+    from ccusage.redact import redact
 
 # Wrapped so an import failure (bad edit, Python-version incompatibility) is
 # caught by main()'s fail-open handling instead of crashing before any error
@@ -77,6 +82,9 @@ try:
         OPTION_SWITCH_TRUST_API_KEY,
         OPTION_SWITCH_TRUST_ENVIRONMENT,
         OPTION_SWITCH_TRUST_MODE,
+        OPTION_SWITCH_TRUST_PII_REDACTION,
+        PII_REDACTION_DEFAULT,
+        PII_REDACTION_LEVELS,
         REPORT_MODE_CONDENSED,
         REPORT_MODE_FULL,
         REPORT_MODE_NONE,
@@ -88,6 +96,8 @@ try:
         build_llm_interaction_turn,
     )
     from ccusage.log import log, log_path
+    from ccusage.pii import PiiRedactor
+    from ccusage.redact import redact
 except Exception as exc:  # noqa: BLE001 - fail-open entrypoint, see main()
     _IMPORT_ERROR = exc
 
@@ -131,6 +141,21 @@ def _configured_report_mode() -> str:
         )
         or DEFAULT_REPORT_MODE
     )
+
+
+def _no_less_redaction_than_default(level: str) -> bool:
+    return level in PII_REDACTION_LEVELS and PII_REDACTION_LEVELS.index(
+        level
+    ) >= PII_REDACTION_LEVELS.index(PII_REDACTION_DEFAULT)
+
+
+def _configured_pii_level() -> str:
+    """Read switch_trust_pii_redaction; a project may only make it stricter, and an unknown value means default."""
+    level = project_settings.get(
+        OPTION_SWITCH_TRUST_PII_REDACTION,
+        accept_from_project=_no_less_redaction_than_default,
+    )
+    return level if level in PII_REDACTION_LEVELS else PII_REDACTION_DEFAULT
 
 
 class _Budget:
@@ -199,6 +224,7 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
         return 0
 
     sid = session_id[:8]
+    pii = PiiRedactor(_configured_pii_level())
     if not os.path.isfile(state.meta_path(session_id)):
         state.write_meta(session_id, transcript_path)
     if report_mode == REPORT_MODE_CONDENSED and mode == "stop":
@@ -263,6 +289,7 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
                     repo_url,
                     branch,
                     window_start=cursor,
+                    pii=pii,
                 )
                 event = build_interaction_event(interaction, repo_url)
             except Exception as exc:
@@ -273,7 +300,8 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
             )
             log(
                 f"reported model={model_name} eff_input={bucket['eff_input']} "
-                f"output={bucket['output']} branch={branch or '-'} status={status}"
+                f"output={bucket['output']} branch={redact(branch, pii) or '-'} "
+                f"status={status}"
             )
             if not upload.is_success(status) and not upload.is_permanent_rejection(
                 status
@@ -325,7 +353,7 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
             break
         try:
             interaction = build_llm_interaction_turn(
-                session_id, turn, agent_name, repo_name, repo_url, seq
+                session_id, turn, agent_name, repo_name, repo_url, seq, pii
             )
             event = build_interaction_event(interaction, repo_url)
         except Exception as exc:
@@ -452,6 +480,7 @@ def cmd_status(state_dir_override: str | None = None) -> int:
     if report_mode not in VALID_REPORT_MODES:
         report_mode = f"{report_mode} (invalid, falls back to condensed)"
     print(f"  report mode : {report_mode}")
+    print(f"  pii redaction : {_configured_pii_level()}")
     # Config (values never printed).
     endpoint = (
         project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)
