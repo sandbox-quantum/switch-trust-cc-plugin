@@ -1,10 +1,23 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Synthetic secret fixtures used to test hooks/ccusage/redact.py's redaction patterns -- not real credentials"
+condition = "AND"
 paths = [
     '''tests/test_redact\.py''',
     '''tests/test_reporter\.py''',
     '''tests/test_upload\.py''',
+]
+regexes = [
+    '''sk_test_secretvalue''',
+    '''admin:\{\}''',
+    '''wJalrXUtnFEMI/K7MDENG/bPxRfiCY''',
+    '''LEAKNPMRClegacy99''',
+    '''Ym9iOkxFQUtET0NLRVJwdw==''',
+    '''CAESabc123def456''',
+    '''-----BEGIN RSA PRIVATE KEY-----''',
+    '''-----BEGIN PGP PRIVATE KEY BLOCK-----''',
+    '''-----BEGIN PRIVATE KEY-----''',
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJmYWtlIn0\.''',
 ]

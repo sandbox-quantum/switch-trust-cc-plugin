@@ -1,5 +1,4 @@
 {
-  "_comment": "Cross-language golden vectors for the LOWERCASING mdl_ model fingerprint convention: mdl_ + SHAKE-256(16) of lower(manufacturer):lower(name). Consumers: Go eventuploader.makeModelFingerprint (event_uploader_test.go) and roi_cc_plugin make_model_fingerprint (tests/test_fingerprints.py). Vectors deliberately mix input casing to pin that normalization. The case-preserving convention (inventory, enrich_db, analysis enrichment, integrations worker) is pinned separately by model_enrich_fingerprint/golden.json; the two disagree on mixed-case inputs, and unifying them would re-key persisted model ids.",
   "vectors": [
     {
       "manufacturer": "Anthropic",

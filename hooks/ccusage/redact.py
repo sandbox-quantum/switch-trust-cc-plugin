@@ -11,6 +11,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from .pii import PiiRedactor
+
 BLOCK_CAP_BYTES = 16 * 1024
 TEXT_BLOCK_CAP_BYTES = 64 * 1024
 EVENT_CAP_BYTES = 1024 * 1024
@@ -324,7 +326,7 @@ def _replacement(kind: str) -> Callable[[re.Match[str]], str]:
     return sub
 
 
-def redact(text: str) -> str:
+def redact(text: str, pii: PiiRedactor | None = None) -> str:
     """Replace each matched secret with `[REDACTED:<type>]`; an unterminated PEM block redacts its base64 run."""
     if not text:
         return text
@@ -332,7 +334,7 @@ def redact(text: str) -> str:
         text = pattern.sub(_replacement(kind), text)
     if _YAML_LIST_HINT.search(text):
         text = _redact_yaml_lists(text)
-    return text
+    return pii(text) if pii is not None else text
 
 
 def truncate_utf8(text: str, cap: int, total: int | None = None) -> str:
@@ -352,21 +354,21 @@ def truncate_utf8(text: str, cap: int, total: int | None = None) -> str:
     return kept[:end] + marker
 
 
-def redact_capped(text: str, cap: int) -> str:
+def redact_capped(text: str, cap: int, pii: PiiRedactor | None = None) -> str:
     """Redact, then cap at `cap` bytes; only the first 2*cap chars are scanned.
 
     That prefix is cut back to a token boundary so a secret straddling the cut
     is never redaction-shrunk into view as a fragment.
     """
     if len(text) <= 2 * cap:
-        return truncate_utf8(redact(text), cap)
+        return truncate_utf8(redact(text, pii), cap)
     head = text[: 2 * cap]
     tail_start = max(0, len(head) - 8192)
     cut = max(
         (b.start() for b in _BOUNDARY.finditer(head, tail_start)), default=tail_start
     )
     head = head[:cut]
-    return truncate_utf8(redact(head), cap, len(text.encode("utf-8", "replace")))
+    return truncate_utf8(redact(head, pii), cap, len(text.encode("utf-8", "replace")))
 
 
 def is_sensitive_path(path: str) -> bool:
@@ -465,7 +467,11 @@ def _walk_json(
     return holder[0]
 
 
-def _fit_json(tool_input: Any, cap: int, sensitive: bool) -> str:
+def _fit_json(
+    tool_input: Any, cap: int, sensitive: bool, pii: PiiRedactor | None = None
+) -> str:
+    if pii is not None:
+        tool_input = pii.structured(tool_input)
     skeleton = json.dumps(_walk_json(tool_input, _blank, lambda k: k))
     if len(skeleton) > cap:
         return json.dumps(f"[TRUNCATED: input_json over the {cap}-byte cap]")
@@ -475,10 +481,10 @@ def _fit_json(tool_input: Any, cap: int, sensitive: bool) -> str:
             return _SENSITIVE_FILE
         if credential and _is_secret_value(value):
             return _CREDENTIAL
-        return redact_capped(value, BLOCK_CAP_BYTES)
+        return redact_capped(value, BLOCK_CAP_BYTES, pii)
 
     def on_key(key: str) -> str:
-        return redact_capped(key, BLOCK_CAP_BYTES)
+        return redact_capped(key, BLOCK_CAP_BYTES, pii)
 
     redacted = _walk_json(tool_input, on_string, on_key)
     out = json.dumps(redacted)
@@ -579,12 +585,14 @@ def _sanitize_block(
     cap: int,
     inputs: dict[int, Any],
     sensitive_ids: set[str],
+    pii: PiiRedactor,
 ) -> str:
     if block["kind"] == "tool_result" and block["tool_use_id"] in sensitive_ids:
         return _SENSITIVE_FILE if block[field] else ""
     if block["kind"] == "tool_use" and inputs[id(block)] is not None:
-        return nul_free(_fit_json(inputs[id(block)], cap, block["id"] in sensitive_ids))
-    return nul_free(redact_capped(block[field].replace("\x00", "\ufffd"), cap))
+        sensitive = block["id"] in sensitive_ids
+        return nul_free(_fit_json(inputs[id(block)], cap, sensitive, pii))
+    return nul_free(redact_capped(block[field].replace("\x00", "\ufffd"), cap, pii))
 
 
 def _sensitive_input(tool_input: Any) -> bool:
@@ -595,13 +603,16 @@ def _sensitive_input(tool_input: Any) -> bool:
 
 
 def sanitize_turn(
-    prompt_blocks: list[dict[str, Any]], response_blocks: list[dict[str, Any]]
+    prompt_blocks: list[dict[str, Any]],
+    response_blocks: list[dict[str, Any]],
+    pii: PiiRedactor | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Redact and cap a turn's blocks so the whole event stays under EVENT_CAP_BYTES.
 
     Text blocks are budgeted before tool blocks; blocks that no longer fit are
     dropped and counted in a trailing marker.
     """
+    pii = pii if pii is not None else PiiRedactor()
     inputs = {
         id(b): _parse(b["input_json"])
         for b in response_blocks
@@ -634,7 +645,7 @@ def sanitize_turn(
             omitted += 1
             continue
         try:
-            value = _sanitize_block(block, field, cap, inputs, sensitive_ids)
+            value = _sanitize_block(block, field, cap, inputs, sensitive_ids, pii)
         except Exception:
             value = _UNPROCESSABLE
             if block["kind"] == "tool_use":
