@@ -28,7 +28,7 @@ key, endpoint or identity).
 | Switch Trust Ingestion Endpoint | no | URL of the ingestion service (defaults to production instance). Must be `https://` on an allowed Switch Trust host, or `http://localhost` / `http://127.0.0.1` for local development — anything else is refused and logged, never sent. |
 | User Email Override | no | Override the per-user identity used for attribution (else auto-detected locally: `git config user.email` → OS login name; no cloud credentials are used — see [Data & Privacy](#data--privacy)) |
 | Report Mode | no | `condensed`, `text`, `full` (default), or `none` (disables reporting) — see [Report modes](#report-modes) |
-| PII Redaction | no | `default` (default), `strict`, or `off` — best-effort replacement of card numbers, US SSNs, IBANs and labelled IDs; see [PII redaction](#pii-redaction) |
+| PII Redaction | no | `default` (default), `strict`, or `off` — best-effort replacement of email and IP addresses, card numbers, national ID numbers, IBANs and labelled IDs; see [PII redaction](#pii-redaction) |
 
 - Hooks and the `/switch-trust-status` command activate as soon as the install
   finishes. If the install summary asks you to, run `/reload-plugins` (a full
@@ -105,27 +105,68 @@ does not guarantee removal. The **PII Redaction** setting
 
 | Setting | What's replaced |
 | --- | --- |
-| `default` | **Payment card numbers** with a known issuer prefix (Visa, Mastercard, Amex, Discover) and a valid Luhn check digit — in prose, CSV, SQL and JSON, including JSON numbers. **US Social Security numbers** in `123-45-6789` form that pass the SSA validity rules, or as 9 digits right after a label such as `SSN`, `social security number`, `taxpayer_id` or `TIN`, or under such a JSON key. **IBANs** with a valid checksum. **Passport, driver's licence and medical-record numbers, and dates of birth**, only right after a label such as `passport no.`, `driver's license`, `MRN`, `DOB` or `date of birth`, or under a matching JSON key in tool input. |
+| `default` | **Email addresses**, together with the display name in `Name <address>` forms such as git `Author:` lines, `Co-authored-by:` trailers and package `author` fields. **IP addresses**, IPv4 and IPv6 (including compressed and IPv4-mapped forms), public and private alike: Legal treats an IP address as personal data, and a private address (`10.x`, `172.16–31.x`, `192.168.x`, `100.64.x`, link-local, `fc00::/7`) can still identify a person's machine. **Payment card numbers** with a known issuer prefix (Visa, Mastercard, Amex, Discover) and a valid Luhn check digit — in prose, CSV, SQL and JSON, including JSON numbers. **National ID numbers** that pass their check-digit or structure rules: US Social Security numbers in `123-45-6789` form that pass the SSA validity rules; UK National Insurance numbers (`AB123456C`, `AB 12 34 56 C`, `AB-12-34-56-C`, `AB 123456 C`), Spanish DNI/NIE numbers and Italian codici fiscali wherever they appear in upper case; Indian PANs in upper case, which have no public checksum and are matched by shape and their fourth-letter holder-type code only; French NIR, Indian Aadhaar and Belgian national numbers in their usual grouped forms (`1 84 12 76 451 089 46`, `2341 2341 2346`, `85.07.30-033.28`); and Canadian SINs, Dutch BSNs, Polish PESELs, 9-digit SSNs, lower-case NINO, PAN and DNI/NIE values, dashed Aadhaar numbers, and the ungrouped NIR, Aadhaar and Belgian forms only right after a label such as `SIN`, `BSN`, `PESEL`, `SSN`, `NINO`, `NI number`, `PAN`, `DNI`, `NIE`, `Aadhaar`, `NIR` or `rijksregisternummer`, or under a matching JSON key. **IBANs** with a valid checksum. **Passport, driver's licence and medical-record numbers, and dates of birth**, only right after a label such as `passport no.`, `driver's license`, `MRN`, `DOB` or `date of birth`, or under a matching JSON key in tool input. |
 | `strict` | Everything in `default`, plus phone numbers in `+<country code><number>` form and phone numbers right after a label such as `phone`, `mobile` or `fax`. |
 | `off` | Nothing. Secret redaction still applies. |
 
-Each value is replaced with a numbered placeholder such as `[card-1]` or
-`[ssn-2]`. Within one report (everything one hook run sends) the same value
-gets the same placeholder and different values get different ones, so repeated tool calls can still be told
-apart. Placeholders are plain sequence numbers, not hashes, so they cannot be
-reversed; numbering restarts with each report.
+There is no separate switch for email or IP addresses: `off` turns off all
+PII redaction, and secret redaction still applies.
 
-It does **not** detect: names, email addresses, postal addresses, phone
-numbers (outside `strict`), national ID numbers from countries other than
-the US, ID numbers and dates of birth with no label next to them, or values
-split up or obfuscated. **Free-text special-category data — health
-conditions, religion, political opinions, ethnicity, sexual orientation — is
-not detected at all**; patterns cannot recognize it reliably. It also
-replaces some look-alikes: well-known test card numbers, about 2–3% of
-random 16-digit order numbers, most values shaped like `123-45-6789` (such as
-part numbers), unless a label such as `order id` or `part` sits right before
-them, and card-like digit runs inside mostly-numeric hex IDs (an instance ID
-such as `i-4743355369860f07b` can become `i-[card-1]f07b`).
+These are never replaced, because they identify infrastructure rather than
+a person, or because replacing them would garble ordinary developer
+output: loopback and unspecified addresses (`127.0.0.1`, `::1`, `0.0.0.0`),
+documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
+`2001:db8::/32`), multicast and reserved ranges, well-known public DNS
+resolvers (`1.1.1.1`, `8.8.8.8`, `9.9.9.9` and their IPv6 equivalents),
+cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`, the ECS and
+EKS agent addresses, Azure's `168.63.129.16`, Alibaba's
+`100.100.100.200`), macOS's loopback-interface `fe80::1`,
+network ranges written as CIDR `/24` or wider, four-part version strings
+that follow a cue such as `version`, `v`, `==` or `Chrome/`, or appear in
+a file name or URL path, `git@host:` remotes, `@example.com` and `.test`
+addresses, `name@2x.png` file names, `package@version` specifiers, and SSH
+algorithm names such as `…@openssh.com`.
+
+Each value is replaced with a numbered placeholder such as `[card-1]`,
+`[email-1]`, `[ip-2]` or `[nino-1]`. Within one report (everything one hook
+run sends) the same value gets the same placeholder and different values get
+different ones, so repeated tool calls can still be told apart. Placeholders
+are plain sequence numbers, not hashes, so they cannot be reversed; numbering
+restarts with each report.
+
+Your own identity in the `agent` field (see [Data & Privacy](#data--privacy))
+is attribution, not conversation content, and is sent unchanged.
+
+It does **not** detect: names outside `Name <address>` forms, postal
+addresses, phone numbers (outside `strict`), national ID numbers from other
+countries, IDs that need a label when none is next to them, dates of birth
+with no label next to them, IP addresses written in other notations (a
+single integer, hex, or embedded in a host name such as
+`ec2-54-12-88-3.compute.amazonaws.com`), or values split up or obfuscated.
+EU national IDs are covered only where a reliable checksum exists, so, for
+example, German, Swedish, Danish, Finnish and Portuguese numbers are not
+detected. **Free-text special-category data — health conditions, religion,
+political opinions, ethnicity, sexual orientation — is not detected at
+all**; patterns cannot recognize it reliably.
+
+It also replaces some look-alikes:
+
+- well-known test card numbers, about 2–3% of random 16-digit order
+  numbers, and card-like digit runs inside mostly-numeric hex IDs (an
+  instance ID such as `i-4743355369860f07b` can become `i-[card-1]f07b`);
+- most values shaped like `123-45-6789` (such as part numbers), unless a
+  label such as `order id` or `part` sits right before them;
+- about 38% of random upper-case `ABCDE1234F`-shaped codes (anything with
+  a valid PAN holder-type letter in fourth place) and about 9% of random
+  `AB123456C`-shaped codes (NINO rules), unless a label such as `part`,
+  `sku`, `model` or `order id` sits right before them;
+- about 8% of random space-grouped 12-digit numbers (`1234 5678 9012`, the
+  Aadhaar check) and about 4% of 8-digit-plus-letter codes (`12345678Z`,
+  the Spanish check letter);
+- public-range dotted numbers that are not addresses, such as
+  specification section numbers (`22.1.5.1`) and versions with no cue;
+- the addresses of bots and role accounts (`noreply@…`, service accounts),
+  which are replaced like anyone else's.
 
 A repository you open can make this setting stricter, but never lower it or
 turn it off.
@@ -197,10 +238,10 @@ secrets and of the structured personal data listed in
 data is not detected. If your repository or shell output may contain any of
 this data, use `condensed` or `text` mode, or `none`.
 
-**More:** [Privacy Policy](https://www.sandboxaq.com/legal/privacy-policy),
-[Terms of Service](https://www.sandboxaq.com/legal/eula),
-[Data Handling](https://docs.switchagents.ai/switch-trust/resources/data-handling),
-[Data Protection Addendum](https://docs.switchagents.ai/switch-trust/resources/dpa).
+**More:** [Privacy Policy](https://docs.switchagents.ai/legal/privacy-policy),
+[Terms of Service](https://docs.switchagents.ai/legal/terms),
+[Data Handling](https://docs.switchagents.ai/legal/data-handling),
+[Data Protection Addendum](https://docs.switchagents.ai/legal/dpa).
 
 ## Observability / debugging
 

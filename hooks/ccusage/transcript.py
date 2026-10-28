@@ -10,14 +10,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
-from .config import CACHE_READ_MULT, CACHE_WRITE_1H_MULT, CACHE_WRITE_5M_MULT
 from .log import log
 from .redact import guard_shell_blocks
 
 
 class TranscriptBucket(TypedDict):
-    eff_input: int
+    input: int
     output: int
+    cache_read: int
+    cache_write: int
     last_uuid: str | None
     last_seconds: int
     last_nanos: int
@@ -25,8 +26,10 @@ class TranscriptBucket(TypedDict):
 
 class TranscriptTurn(TypedDict):
     model: str
-    eff_input: int
+    input: int
     output: int
+    cache_read: int
+    cache_write: int
     uuid: str | None
     seconds: int
     nanos: int
@@ -52,10 +55,11 @@ def parse_ts(ts: str | None) -> tuple[int, int]:
         return 0, 0
 
 
-def fold_effective_input(usage: dict[str, Any]) -> int:
-    """Fold raw + cache tokens into a billing-equivalent input-token count."""
-    inp = usage.get("input_tokens") or 0
+def effective_cache_usage(usage: dict[str, Any]) -> tuple[int, int]:
+    """Fold read and write cache tokens into consumable count."""
     cache_read = usage.get("cache_read_input_tokens") or 0
+
+    # For cache write, we have 2 different ones. We fold them into a single count.
     cache_creation = usage.get("cache_creation") or {}
     cr5 = cache_creation.get("ephemeral_5m_input_tokens")
     cr1 = cache_creation.get("ephemeral_1h_input_tokens")
@@ -66,13 +70,9 @@ def fold_effective_input(usage: dict[str, Any]) -> int:
     else:
         cr5 = cr5 or 0
         cr1 = cr1 or 0
-    effective = (
-        inp
-        + CACHE_READ_MULT * cache_read
-        + CACHE_WRITE_5M_MULT * cr5
-        + CACHE_WRITE_1H_MULT * cr1
-    )
-    return int(round(effective))
+    cache_write = cr5 + cr1
+
+    return cache_read, cache_write
 
 
 def read_transcript_delta(
@@ -140,23 +140,28 @@ def read_transcript_delta(
                         continue
                     seen_ids.add(msg_id)
 
-                    eff = fold_effective_input(usage)
+                    input_tokens = usage.get("input_tokens") or 0
+                    cache_read, cache_write = effective_cache_usage(usage)
                     out = usage.get("output_tokens") or 0
-                    total_new += eff + out
+                    total_new += input_tokens + out + cache_read + cache_write
 
                     secs, nanos = parse_ts(obj.get("timestamp"))
                     bucket = per_model.get(model)
                     if bucket is None:
                         bucket = {
-                            "eff_input": 0,
+                            "input": 0,
                             "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0,
                             "last_uuid": entry_uuid,
                             "last_seconds": secs,
                             "last_nanos": nanos,
                         }
                         per_model[model] = bucket
-                    bucket["eff_input"] += eff
+                    bucket["input"] += input_tokens
                     bucket["output"] += out
+                    bucket["cache_read"] += cache_read
+                    bucket["cache_write"] += cache_write
                     if entry_uuid:
                         bucket["last_uuid"] = entry_uuid
                     bucket["last_seconds"] = secs
@@ -256,8 +261,10 @@ def _is_real_prompt(raw_blocks: list[dict[str, Any]]) -> bool:
 def _new_turn(prompt_blocks: list[dict[str, Any]]) -> TranscriptTurn:
     return {
         "model": "",
-        "eff_input": 0,
+        "input": 0,
         "output": 0,
+        "cache_read": 0,
+        "cache_write": 0,
         "uuid": None,
         "seconds": 0,
         "nanos": 0,
@@ -401,11 +408,14 @@ def read_transcript_turns(
                     current["stop_reason"] = message.get("stop_reason") or ""
 
                     if not already_counted:
-                        eff = fold_effective_input(usage)
+                        input_tokens = usage.get("input_tokens") or 0
+                        cache_read, cache_write = effective_cache_usage(usage)
                         out = usage.get("output_tokens") or 0
-                        total_new += eff + out
-                        current["eff_input"] += eff
+                        total_new += input_tokens + out + cache_read + cache_write
+                        current["input"] += input_tokens
                         current["output"] += out
+                        current["cache_read"] += cache_read
+                        current["cache_write"] += cache_write
                 except Exception as exc:
                     log(f"skipping malformed transcript entry: {exc}")
                     continue
