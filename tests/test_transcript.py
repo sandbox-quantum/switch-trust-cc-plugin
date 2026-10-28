@@ -14,7 +14,7 @@ if _HOOKS_DIR not in sys.path:
 
 from ccusage.transcript import (  # noqa: E402
     _tool_result_text,
-    fold_effective_input,
+    effective_cache_usage,
     read_transcript_delta,
     read_transcript_turns,
 )
@@ -25,8 +25,8 @@ def _isolated_state(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path / "state"))
 
 
-def test_fold_effective_input_folds_cache_tokens() -> None:
-    """Cache-read and both cache-creation buckets fold into the effective total."""
+def test_effective_cache_usage_folds_cache_tokens() -> None:
+    """Cache-read and both cache-creation buckets fold into the proper amounts total."""
     usage = {
         "input_tokens": 100,
         "cache_read_input_tokens": 1000,
@@ -35,15 +35,15 @@ def test_fold_effective_input_folds_cache_tokens() -> None:
             "ephemeral_1h_input_tokens": 50,
         },
     }
-    # 100 + 0.10*1000 + 1.25*200 + 2.00*50 = 100 + 100 + 250 + 100 = 550
-    assert fold_effective_input(usage) == 550
+
+    assert effective_cache_usage(usage) == (1000, 250)
 
 
-def test_fold_effective_input_no_cache_breakdown_treated_as_5m() -> None:
-    """Without a 5m/1h breakdown, all cache-creation tokens are priced as 5m."""
+def test_effective_cache_usage_no_cache_breakdown_as_single_write() -> None:
+    """Without a 5m/1h breakdown, only single "write" should happen."""
     usage = {"input_tokens": 10, "cache_creation_input_tokens": 40}
-    # 10 + 1.25*40 = 60
-    assert fold_effective_input(usage) == 60
+
+    assert effective_cache_usage(usage) == (0, 40)
 
 
 def _assistant_line(uuid: str, usage: dict) -> str:
@@ -67,7 +67,7 @@ def test_read_transcript_delta_skips_one_malformed_entry_without_losing_others(
     past them -- silently and permanently stalling reporting for the session.
     """
     good_usage = {"input_tokens": 10, "output_tokens": 5}
-    # A non-empty cache_creation list (not a dict) makes fold_effective_input's
+    # A non-empty cache_creation list (not a dict) makes effective_cache_usage's
     # `.get()` call raise, simulating an unexpected transcript shape. (An
     # empty list would be falsy and silently replaced by `or {}` instead.)
     malformed_usage = {
@@ -92,7 +92,7 @@ def test_read_transcript_delta_skips_one_malformed_entry_without_losing_others(
     )
 
     # Only u1 and u3's tokens are counted; u2 is skipped, not fatal.
-    assert per_model["claude-sonnet-5"]["eff_input"] == 20
+    assert per_model["claude-sonnet-5"]["input"] == 20
     assert per_model["claude-sonnet-5"]["output"] == 10
     assert total_new == 30
     # The cursor still advances all the way to the last entry, so u2 is never
@@ -210,7 +210,7 @@ def test_read_transcript_turns_merges_tool_round_trip_into_one_turn(tmp_path) ->
         {"kind": "text", "text": "Sure:"},
         {"kind": "text", "text": "Found 2 files"},
     ]
-    assert text_turns[0]["eff_input"] == 30
+    assert text_turns[0]["input"] == 30
     assert text_turns[0]["output"] == 13
     assert new_cursor == "b2"
     assert total_new == 43
@@ -383,7 +383,7 @@ def test_read_transcript_turns_merges_many_tool_calls_into_one_turn(tmp_path) ->
     tool_use_ids = [b["id"] for b in turn["response_blocks"] if b["kind"] == "tool_use"]
     assert tool_use_ids == ["t1", "t2", "t3"]
     assert turn["response_blocks"][-1] == {"kind": "text", "text": "done"}
-    assert turn["eff_input"] == 40  # 4 assistant completions x 10 input tokens
+    assert turn["input"] == 40  # 4 assistant completions x 10 input tokens
     assert turn["output"] == 20  # 4 assistant completions x 5 output tokens
     assert new_cursor == "b4"
 
@@ -488,7 +488,7 @@ def test_read_transcript_turns_defers_turn_ending_mid_tool_call(tmp_path) -> Non
         {"kind": "tool_use", "id": "t1", "name": "bash", "input_json": "{}"},
         {"kind": "text", "text": "Found 2 files"},
     ]
-    assert turn["eff_input"] == 105
+    assert turn["input"] == 105
     assert turn["output"] == 28
     assert new_cursor2 == "b2"
 
@@ -552,6 +552,6 @@ def test_read_transcript_turns_keeps_content_from_all_lines_of_a_split_message(
         {"kind": "text", "text": "Found 2 files"},
     ]
     # msg2's usage is counted once, not twice, despite two lines.
-    assert turn["eff_input"] == 105
+    assert turn["input"] == 105
     assert turn["output"] == 28
     assert new_cursor == "b3"

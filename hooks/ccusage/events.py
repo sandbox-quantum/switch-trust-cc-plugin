@@ -136,10 +136,17 @@ def build_turn_content(blocks: list[dict], role: int) -> bytes:
     return body
 
 
-def build_usage(input_tokens: int, output_tokens: int) -> bytes:
+def build_usage(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+) -> bytes:
     """Build a Usage message from already-folded token counts."""
     body = wire.varint_field(1, input_tokens)
     body += wire.varint_field(2, output_tokens)
+    body += wire.varint_field(3, cache_read_tokens)
+    body += wire.varint_field(4, cache_write_tokens)
     return body
 
 
@@ -191,7 +198,15 @@ def build_llm_interaction(
     )
     body += wire.message_field(11, build_app_info(redact(repo_name, pii), repo_url))
     body += wire.varint_field(12, INTERACTION_TYPE_MESSAGE)
-    body += wire.message_field(13, build_usage(bucket["eff_input"], bucket["output"]))
+    body += wire.message_field(
+        13,
+        build_usage(
+            bucket["input"],
+            bucket["output"],
+            bucket["cache_read"],
+            bucket["cache_write"],
+        ),
+    )
     body += wire.string_field(17, session_id)
     body += wire.message_field(18, build_agent(agent_name, model_name))
     return body
@@ -223,7 +238,12 @@ def build_llm_interaction_turn(
     body += wire.message_field(6, build_turn_content(response_blocks, ROLE_ASSISTANT))
     body += wire.message_field(11, build_app_info(redact(repo_name, pii), repo_url))
     body += wire.varint_field(12, INTERACTION_TYPE_MESSAGE)
-    body += wire.message_field(13, build_usage(turn["eff_input"], turn["output"]))
+    body += wire.message_field(
+        13,
+        build_usage(
+            turn["input"], turn["output"], turn["cache_read"], turn["cache_write"]
+        ),
+    )
     body += wire.string_field(14, session_id)
     body += wire.varint_field(15, sequence_number)
     body += wire.string_field(17, session_id)

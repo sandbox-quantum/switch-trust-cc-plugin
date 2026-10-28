@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.server
 import os
+import ssl
 import sys
 import threading
 import urllib.request
@@ -458,6 +459,94 @@ def test_success_after_key_change_rewrites_health(monkeypatch, tmp_path) -> None
     assert stored["id"] == upload._health_id(endpoint, "sk_new")
     assert stored["retry_at"] == 0
     assert "last_failure" not in stored
+
+
+class _StubContext:
+    def __init__(self, ca_count: int) -> None:
+        self._ca_count = ca_count
+
+    def cert_store_stats(self) -> dict:
+        return {"x509_ca": self._ca_count}
+
+
+@pytest.fixture(autouse=True)
+def _clear_ssl_context_cache():
+    upload._ssl_context.cache_clear()
+    yield
+    upload._ssl_context.cache_clear()
+
+
+def test_ssl_context_keeps_default_when_it_has_ca_certs(monkeypatch) -> None:
+    monkeypatch.setattr(ssl, "create_default_context", lambda *a, **k: _StubContext(5))
+
+    context = upload._ssl_context()
+
+    assert isinstance(context, _StubContext)
+
+
+def test_ssl_context_prefers_certifi_when_default_has_no_ca_certs(monkeypatch) -> None:
+    import types  # noqa: PLC0415
+
+    sentinel = object()
+    calls = []
+
+    def _fake_create_default_context(*_args, **kwargs):
+        calls.append(kwargs)
+        return sentinel if kwargs else _StubContext(0)
+
+    monkeypatch.setattr(ssl, "create_default_context", _fake_create_default_context)
+    monkeypatch.setitem(
+        sys.modules, "certifi", types.SimpleNamespace(where=lambda: "/fake/cacert.pem")
+    )
+
+    context = upload._ssl_context()
+
+    assert context is sentinel
+    assert calls[-1] == {"cafile": "/fake/cacert.pem"}
+
+
+def test_ssl_context_falls_back_to_macos_bundle_without_certifi(monkeypatch) -> None:
+    sentinel = object()
+    calls = []
+
+    def _fake_create_default_context(*_args, **kwargs):
+        calls.append(kwargs)
+        return sentinel if kwargs else _StubContext(0)
+
+    monkeypatch.setattr(ssl, "create_default_context", _fake_create_default_context)
+    monkeypatch.setitem(sys.modules, "certifi", None)  # import certifi -> ImportError
+    monkeypatch.setattr(
+        os.path, "isfile", lambda path: path == upload._MACOS_SYSTEM_CA_BUNDLE
+    )
+
+    context = upload._ssl_context()
+
+    assert context is sentinel
+    assert calls[-1] == {"cafile": upload._MACOS_SYSTEM_CA_BUNDLE}
+
+
+def test_ssl_context_gives_up_gracefully_when_no_fallback_exists(monkeypatch) -> None:
+    stub = _StubContext(0)
+    monkeypatch.setattr(ssl, "create_default_context", lambda *a, **k: stub)
+    monkeypatch.setitem(sys.modules, "certifi", None)
+    monkeypatch.setattr(os.path, "isfile", lambda _path: False)
+
+    context = upload._ssl_context()
+
+    assert context is stub
+
+
+def test_send_event_classifies_tls_verify_failure(monkeypatch, capsys) -> None:
+    def _raise(_req, _timeout):
+        raise ssl.SSLCertVerificationError("certificate verify failed")
+
+    _patch_opener(monkeypatch, _raise)
+
+    status, detail = upload._send_event("http://127.0.0.1:1", "k", b"x", None, 1)
+
+    assert status == 0
+    assert detail == {"reason": "no CA bundle"}
+    assert "TLS verify failed" in capsys.readouterr().err
 
 
 def test_corrupt_or_future_health_is_sanitised(monkeypatch) -> None:

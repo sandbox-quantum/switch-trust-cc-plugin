@@ -11,7 +11,7 @@ Your plugin settings, as configured via `/config`:
 Run this command and show me its full output:
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/hooks/ccusage_reporter.py status --state-dir "${CLAUDE_PLUGIN_DATA}"
+python3 ${CLAUDE_PLUGIN_ROOT}/hooks/ccusage_reporter.py status --state-dir "${CLAUDE_PLUGIN_DATA}" --mode "${user_config.switch_trust_mode}" --endpoint "${user_config.switch_trust_environment}"
 ```
 
 Then, in plain language:

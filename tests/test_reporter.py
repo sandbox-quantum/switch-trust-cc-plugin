@@ -17,7 +17,13 @@ import ccusage_reporter  # noqa: E402
 from ccusage import fingerprints, state, upload  # noqa: E402
 
 
-def _write_transcript(path, n_turns: int, surrogate_turn: int = 0) -> str:
+def _write_transcript(
+    path,
+    n_turns: int,
+    surrogate_turn: int = 0,
+    input_tokens: int = 100,
+    output_tokens: int = 50,
+) -> str:
     with open(path, "w") as fh:
         for i in range(1, n_turns + 1):
             user = {
@@ -34,7 +40,10 @@ def _write_transcript(path, n_turns: int, surrogate_turn: int = 0) -> str:
                     "id": f"m{i}",
                     "model": "claude-opus-4",
                     "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    },
                     "content": [{"type": "text", "text": text}],
                 },
             }
@@ -447,6 +456,69 @@ def test_gc_runs_after_reporting_with_leftover_budget(tmp_path, monkeypatch) -> 
     assert len(calls) == 1
     assert calls[0][0] == 3
     assert 0 < calls[0][1] <= 0.3
+
+
+def test_failed_send_is_logged_as_failed_not_reported(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    _setup(tmp_path, monkeypatch, results=[503])
+    transcript = _write_transcript(tmp_path / "t.jsonl", 1)
+
+    ccusage_reporter.run("stop", _hook_input(transcript))
+
+    log_text = (tmp_path / "data" / "ccusage.log").read_text()
+    assert "send failed turn seq=0" in log_text
+    assert "reported turn seq=0" not in log_text
+
+
+def test_mid_session_enable_skips_large_backfill(tmp_path, monkeypatch) -> None:
+    """A huge pre-existing backlog (no cursor yet) is treated as history, not catch-up."""
+    sent = _setup(tmp_path, monkeypatch)
+    # Threshold is 10 * STOP_MIN_TOKENS = 200000; make the first of two turns
+    # alone exceed it so only the second (the one that triggered this Stop)
+    # is reported.
+    transcript = _write_transcript(
+        tmp_path / "t.jsonl", 2, input_tokens=150000, output_tokens=60000
+    )
+
+    ccusage_reporter.run("stop", _hook_input(transcript))
+
+    assert sent == [[], [2]]
+    assert state.read_cursor("s1") == "a2"
+
+
+def test_small_catch_up_with_no_cursor_still_reports_everything(
+    tmp_path, monkeypatch
+) -> None:
+    """A couple of legitimately-bunched turns (e.g. a missed prior run) aren't dropped."""
+    sent = _setup(tmp_path, monkeypatch)
+    transcript = _write_transcript(tmp_path / "t.jsonl", 3)
+
+    ccusage_reporter.run("stop", _hook_input(transcript))
+
+    assert sent == [[], [1], [2], [3]]
+    assert state.read_cursor("s1") == "a3"
+
+
+def test_status_uses_resolved_mode_and_endpoint_overrides(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The status command can't see CLAUDE_PLUGIN_OPTION_* (Bash-tool invocation,
+    not a real hook), so it must trust the caller-resolved overrides instead."""
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_SWITCH_TRUST_MODE", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_SWITCH_TRUST_ENVIRONMENT", raising=False)
+
+    ccusage_reporter.cmd_status(
+        mode_override="text", endpoint_override="https://staging.switchagents.ai"
+    )
+
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.strip() == "report mode : text" for line in lines)
+    assert any(
+        line.strip() == "ingestion endpoint : https://staging.switchagents.ai"
+        for line in lines
+    )
 
 
 def test_condensed_session_end_probes_once(tmp_path, monkeypatch) -> None:

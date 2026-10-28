@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 from typing import Any
 
 from . import wire
@@ -48,11 +50,58 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# macOS ships a usable CA bundle here independent of which Python interpreter
+# is running this script. python.org's own installer, by contrast, bundles
+# its own empty trust store until the user runs "Install Certificates.command",
+# so its default ssl context has zero CA certs loaded.
+_MACOS_SYSTEM_CA_BUNDLE = "/etc/ssl/cert.pem"
+
+
+def _context_has_ca_certs(context: ssl.SSLContext) -> bool:
+    try:
+        return context.cert_store_stats().get("x509_ca", 0) > 0
+    except Exception:
+        return True  # can't tell -- don't override a context we can't introspect
+
+
+@lru_cache(maxsize=1)
+def _ssl_context() -> ssl.SSLContext | None:
+    """Build the SSL context for HTTPS POSTs, falling back when the default has no CA bundle.
+
+    Tried in order once the stdlib default context turns out to be unusable:
+    `certifi` (if installed), then the macOS system bundle. Returns the
+    original (possibly unusable) default context if neither is available, so
+    behavior outside the broken-CA case is unchanged.
+    """
+    try:
+        context = ssl.create_default_context()
+    except Exception:
+        return None
+    if _context_has_ca_certs(context):
+        return context
+    try:
+        import certifi  # noqa: PLC0415 - optional dependency, only imported if present
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    if os.path.isfile(_MACOS_SYSTEM_CA_BUNDLE):
+        try:
+            return ssl.create_default_context(cafile=_MACOS_SYSTEM_CA_BUNDLE)
+        except Exception:
+            pass
+    return context
+
+
 def _opener(url: str) -> urllib.request.OpenerDirector:
     """Loopback skips env proxies: urllib only bypasses localhost if NO_PROXY lists it."""
+    handlers: list[Any] = [_NoRedirect]
+    context = _ssl_context()
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
     if _host(url) in _LOCAL_HTTP_HOSTS:
-        return urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(_NoRedirect)
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers)
 
 
 def _is_allowed_endpoint(endpoint: str) -> bool:
@@ -244,6 +293,9 @@ def _send_event(
         elif exc.code == 401:
             info["reason"] = _auth_failure_reason(detail)
         return exc.code, info
+    except ssl.SSLCertVerificationError as exc:
+        log(f"POST TLS verify failed url={_without_query(url)} err={exc}")
+        return 0, {"reason": "no CA bundle"}
     except Exception as exc:
         log(f"POST failed url={_without_query(url)} err={exc}")
         return 0, {"reason": "connection failed"}
