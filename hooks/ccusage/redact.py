@@ -470,11 +470,11 @@ def _walk_json(
 def _fit_json(
     tool_input: Any, cap: int, sensitive: bool, pii: PiiRedactor | None = None
 ) -> str:
-    if pii is not None:
-        tool_input = pii.structured(tool_input)
     skeleton = json.dumps(_walk_json(tool_input, _blank, lambda k: k))
     if len(skeleton) > cap:
         return json.dumps(f"[TRUNCATED: input_json over the {cap}-byte cap]")
+    if pii is not None:
+        tool_input = pii.structured(tool_input)
 
     def on_string(value: str, in_content: bool, credential: bool) -> str:
         if sensitive and in_content:

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         GC_TIME_SLICE_S,
         HOOK_BUDGET_S,
         HTTP_TIMEOUT_S,
+        MID_SESSION_BACKFILL_TOKENS_THRESHOLD,
         MIN_POST_TIMEOUT_S,
         OPTION_SWITCH_TRUST_API_KEY,
         OPTION_SWITCH_TRUST_ENVIRONMENT,
@@ -78,6 +79,7 @@ try:
         GC_TIME_SLICE_S,
         HOOK_BUDGET_S,
         HTTP_TIMEOUT_S,
+        MID_SESSION_BACKFILL_TOKENS_THRESHOLD,
         MIN_POST_TIMEOUT_S,
         OPTION_SWITCH_TRUST_API_KEY,
         OPTION_SWITCH_TRUST_ENVIRONMENT,
@@ -271,7 +273,7 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
         )
         delivered = True
         for model_name, bucket in per_model.items():
-            if bucket["eff_input"] <= 0 and bucket["output"] <= 0:
+            if bucket["input"] <= 0 and bucket["output"] <= 0:
                 continue
             timeout = budget.post_timeout()
             if timeout is None:
@@ -298,9 +300,10 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
             status = budget.timed(
                 upload.post_event_status, endpoint, api_key, event, repo_url, timeout
             )
+            verb = "reported" if upload.is_success(status) else "send failed"
             log(
-                f"reported model={model_name} eff_input={bucket['eff_input']} "
-                f"output={bucket['output']} branch={redact(branch, pii) or '-'} "
+                f"{verb} model={model_name} input={bucket['input']} cache_read={bucket['cache_read']} "
+                f"cache_write={bucket['cache_write']} output={bucket['output']} branch={redact(branch, pii) or '-'} "
                 f"status={status}"
             )
             if not upload.is_success(status) and not upload.is_permanent_rejection(
@@ -317,6 +320,32 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
     turns, new_cursor, total_new = transcript.read_transcript_turns(
         transcript_path, cursor, include_tools=report_mode == REPORT_MODE_FULL
     )
+    if cursor is None and len(turns) > 1:
+        # No cursor can mean either a brand-new session (the first Stop never
+        # throttles, so a couple of turns can legitimately bunch up from a
+        # missed/crashed prior invocation) or the plugin being enabled
+        # partway through a session that already has substantial history --
+        # the two look identical from here. Use scale to tell them apart:
+        # only a backlog far past normal catch-up is treated as pre-existing
+        # history that shouldn't be uploaded. Keep the turn that just
+        # triggered this hook and let the cursor (still the full new_cursor
+        # below) skip the rest for good.
+        prior_tokens = sum(
+            t["input"] + t["output"] + t["cache_read"] + t["cache_write"]
+            for t in turns[:-1]
+        )
+        if prior_tokens > MID_SESSION_BACKFILL_TOKENS_THRESHOLD:
+            skipped = len(turns) - 1
+            log(
+                f"{sid} mode={mode}: {skipped} prior turn(s) ({prior_tokens} tokens) "
+                "already in the transcript at first report for this session; "
+                "skipping backfill"
+            )
+            turns = turns[-1:]
+            total_new = sum(
+                t["input"] + t["output"] + t["cache_read"] + t["cache_write"]
+                for t in turns
+            )
     if not turns:
         log(f"{sid} mode={mode}: no new messages since last report")
         if mode == "end":
@@ -343,7 +372,7 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
     )
     all_ok = True
     for index, turn in enumerate(turns):
-        if turn["eff_input"] <= 0 and turn["output"] <= 0:
+        if turn["input"] <= 0 and turn["output"] <= 0:
             continue
         timeout = budget.post_timeout()
         if timeout is None:
@@ -363,9 +392,10 @@ def _report(mode: str, hook_input: dict[str, Any], budget: _Budget) -> int:
         status = budget.timed(
             upload.post_event_status, endpoint, api_key, event, repo_url, timeout
         )
+        verb = "reported turn" if upload.is_success(status) else "send failed turn"
         log(
-            f"reported turn seq={seq} model={turn['model']} "
-            f"eff_input={turn['eff_input']} output={turn['output']} status={status}"
+            f"{verb} seq={seq} model={turn['model']} "
+            f"input={turn['input']} cache_read={turn['cache_read']} cache_write={turn['cache_write']} output={turn['output']} status={status}"
         )
         if upload.is_success(status):
             seq += 1
@@ -412,16 +442,21 @@ def _ensure_session_open(
     )
 
 
-def _last_failure_line(state_dir_override: str | None) -> str:
+def _last_failure_line(
+    state_dir_override: str | None, endpoint_override: str | None = None
+) -> str:
     try:
-        return _describe_last_failure(state_dir_override)
+        return _describe_last_failure(state_dir_override, endpoint_override)
     except Exception as exc:
         return f"last_failure: unreadable ({type(exc).__name__})"
 
 
-def _describe_last_failure(state_dir_override: str | None) -> str:
+def _describe_last_failure(
+    state_dir_override: str | None, endpoint_override: str | None = None
+) -> str:
     endpoint = (
-        project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)
+        endpoint_override
+        or project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)
         or DEFAULT_INGESTION_ENDPOINT
     )
     api_key = project_settings.get(OPTION_SWITCH_TRUST_API_KEY)
@@ -454,36 +489,51 @@ def _describe_last_failure(state_dir_override: str | None) -> str:
     return line + f" ({consecutive} consecutive failed runs){suffix}"
 
 
-def _parse_state_dir_flag(args: list[str]) -> str | None:
-    """Parse `--state-dir <path>` / `--state-dir=<path>` from the `status` subcommand's args."""
+def _parse_flag(args: list[str], name: str) -> str | None:
+    """Parse `--<name> <value>` / `--<name>=<value>` from the `status` subcommand's args."""
+    flag = f"--{name}"
     for i, arg in enumerate(args):
-        if arg == "--state-dir" and i + 1 < len(args):
+        if arg == flag and i + 1 < len(args):
             return args[i + 1]
-        if arg.startswith("--state-dir="):
+        if arg.startswith(f"{flag}="):
             return arg.split("=", 1)[1]
     return None
 
 
-def cmd_status(state_dir_override: str | None = None) -> int:
+def cmd_status(
+    state_dir_override: str | None = None,
+    mode_override: str | None = None,
+    endpoint_override: str | None = None,
+) -> int:
     """Print where state/logs live, config presence, and recent activity.
 
     `state_dir_override`, when given, is used in place of `${CLAUDE_PLUGIN_DATA}`
     -- see `state.state_dir()`'s docstring for why this matters when `status`
     is invoked from a command's Bash tool call rather than as a real hook.
+
+    `mode_override`/`endpoint_override` are needed for the same reason:
+    `CLAUDE_PLUGIN_OPTION_*` env vars are only exported to real hook
+    subprocesses, not Bash-tool invocations, so `_configured_report_mode()`/
+    `project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)` would otherwise
+    silently fall back to the hardcoded defaults here even when the user has
+    configured different values via `/config`. The `switch-trust-status`
+    command passes its own already-resolved `${user_config.*}` values through
+    these flags instead.
     """
     d = state.state_dir(state_dir_override)
     print("ccusage plugin status")
-    print(f"  {_last_failure_line(state_dir_override)}")
+    print(f"  {_last_failure_line(state_dir_override, endpoint_override)}")
     print(f"  state dir : {d}")
     print(f"  log file  : {log_path(state_dir_override)}")
-    report_mode = _configured_report_mode()
+    report_mode = mode_override or _configured_report_mode()
     if report_mode not in VALID_REPORT_MODES:
         report_mode = f"{report_mode} (invalid, falls back to condensed)"
     print(f"  report mode : {report_mode}")
     print(f"  pii redaction : {_configured_pii_level()}")
     # Config (values never printed).
     endpoint = (
-        project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)
+        endpoint_override
+        or project_settings.get(OPTION_SWITCH_TRUST_ENVIRONMENT)
         or DEFAULT_INGESTION_ENDPOINT
     )
     print(f"  ingestion endpoint : {endpoint}")
@@ -529,7 +579,12 @@ def main() -> int:
         mode = sys.argv[1] if len(sys.argv) > 1 else "stop"
 
         if mode in ("status", "where"):
-            return cmd_status(_parse_state_dir_flag(sys.argv[2:]))
+            rest = sys.argv[2:]
+            return cmd_status(
+                _parse_flag(rest, "state-dir"),
+                _parse_flag(rest, "mode"),
+                _parse_flag(rest, "endpoint"),
+            )
 
         try:
             raw = sys.stdin.read()

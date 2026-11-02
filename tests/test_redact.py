@@ -14,6 +14,7 @@ if _HOOKS_DIR not in sys.path:
     sys.path.insert(0, _HOOKS_DIR)
 
 from ccusage import events  # noqa: E402
+from ccusage.pii import PiiRedactor  # noqa: E402
 from ccusage.redact import (  # noqa: E402
     BLOCK_CAP_BYTES,
     EVENT_CAP_BYTES,
@@ -265,8 +266,10 @@ def test_event_stays_under_cap_with_many_large_tool_results() -> None:
         results.append(res)
     turn = {
         "model": "claude-opus-4-8",
-        "eff_input": 1,
+        "input": 1,
         "output": 1,
+        "cache_read": 2,
+        "cache_write": 2,
         "uuid": "u1",
         "seconds": 1700000000,
         "nanos": 0,
@@ -491,6 +494,16 @@ def test_oversized_input_json_becomes_a_valid_placeholder_quickly() -> None:
     assert json.loads(out).startswith("[TRUNCATED: input_json over")
 
 
+def test_oversized_input_json_skips_pii_work(monkeypatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(
+        PiiRedactor, "structured", lambda self, root: calls.append(1) or root
+    )
+    out = _input({"l": ["abcdefgh"] * 300_000})
+    assert json.loads(out).startswith("[TRUNCATED: input_json over")
+    assert calls == []
+
+
 def test_no_token_fragment_survives_a_cut_without_boundary() -> None:
     token = "gh" + "p_" + F * 9
     jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0." + "Q" * 20000
@@ -600,8 +613,10 @@ def test_nul_is_replaced_in_every_text_field() -> None:
                 assert "\x00" not in value and "\\u0000" not in value
     turn = {
         "model": "m\x00",
-        "eff_input": 1,
+        "input": 1,
         "output": 1,
+        "cache_read": 2,
+        "cache_write": 2,
         "uuid": "u",
         "seconds": 1,
         "nanos": 0,
@@ -611,8 +626,10 @@ def test_nul_is_replaced_in_every_text_field() -> None:
     }
     events.build_llm_interaction_turn("s\x00", turn, "a\x00", "r\x00", "", 0)
     bucket = {
-        "eff_input": 1,
+        "input": 1,
         "output": 1,
+        "cache_read": 2,
+        "cache_write": 2,
         "last_uuid": "u",
         "last_seconds": 1,
         "last_nanos": 0,
@@ -632,7 +649,14 @@ _TITLE_SECRETS = [
 
 
 def _condensed_prompt(title: str, repo: str = "r", branch: str | None = "b") -> bytes:
-    bucket = {"eff_input": 1, "output": 1, "last_seconds": 1, "last_nanos": 0}
+    bucket = {
+        "input": 1,
+        "output": 1,
+        "cache_read": 2,
+        "cache_write": 2,
+        "last_seconds": 1,
+        "last_nanos": 0,
+    }
     return events.build_llm_interaction("s", "m", bucket, "a", title, repo, "", branch)
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 SENSOR_TYPE = "claude_code_plugin"
-SENSOR_VERSION = "0.2.0"
+SENSOR_VERSION = "0.2.1"
 ASSET_ID = "claude_code"
 INVENTORY_SESSION_ID = "claude_code"  # static org-wide session for currentness
 EVENTS_PATH = "agent/events/v1"
@@ -19,14 +19,17 @@ AGENT_TYPE_MANAGED = 2
 # Links the Agent to the Model it used (see build_model_dependency in events.py).
 AISPM_DEPENDENCY_TYPE_MODEL = 1
 
-# Effective-token folding multipliers, relative to the base input price.
-CACHE_READ_MULT = 0.10
-CACHE_WRITE_5M_MULT = 1.25
-CACHE_WRITE_1H_MULT = 2.00
-
 # Throttle: on Stop, skip reporting unless enough time OR tokens accumulated.
 STOP_MIN_INTERVAL_S = 60
 STOP_MIN_TOKENS = 20000
+
+# A session's first-ever report (no cursor yet) normally covers at most a
+# couple of turns -- the first Stop never throttles, so a prior crashed/missed
+# invocation can leave a small legitimate backlog. A backlog far past this,
+# though, means the plugin was only just enabled partway through a session
+# that already had substantial history, which shouldn't be uploaded silently.
+# Comfortably above STOP_MIN_TOKENS so normal catch-up is never affected.
+MID_SESSION_BACKFILL_TOKENS_THRESHOLD = 10 * STOP_MIN_TOKENS
 
 # Report modes (switch_trust_mode userConfig option) -- see README.md's Report modes table.
 REPORT_MODE_NONE = "none"

@@ -1,6 +1,6 @@
 {
   "name": "switch-trust-cc-plugin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Claude Code plugin for the Switch Trust platform. Reports Claude Code usage & computed cost to Switch Trust for cost tracking and further analysis.",
   "author": {
     "name": "SandboxAQ"
@@ -8,8 +8,8 @@
   "homepage": "https://github.com/sandbox-quantum/switch-trust-cc-plugin",
   "repository": "https://github.com/sandbox-quantum/switch-trust-cc-plugin",
   "license": "LicenseRef-SandboxAQ-Commons-Clause",
-  "privacyPolicyUrl": "https://www.sandboxaq.com/legal/privacy-policy",
-  "termsOfServiceUrl": "https://www.sandboxaq.com/legal/eula",
+  "privacyPolicyUrl": "https://docs.switchagents.ai/legal/privacy-policy",
+  "termsOfServiceUrl": "https://docs.switchagents.ai/legal/terms",
   "supportUrl": "https://github.com/sandbox-quantum/switch-trust-cc-plugin/issues",
   "keywords": ["switch-trust", "cost-tracking", "observability", "roi", "usage-reporting"],
   "userConfig": {
@@ -36,7 +36,7 @@
     "switch_trust_pii_redaction": {
       "type": "string",
       "title": "PII Redaction",
-      "description": "Best-effort redaction of structured personal data before upload. default replaces payment cards, US SSNs, IBANs, and passport, driver's licence, medical-record numbers and dates of birth next to a label; strict also replaces phone numbers; off keeps credential redaction only. A project's settings can only make this stricter.",
+      "description": "Best-effort redaction of structured personal data before upload. default replaces payment cards, IBANs, email addresses, IP addresses (public and private), national ID numbers (US, UK, Canada, India, Spain, Italy, France, Netherlands, Poland, Belgium), and passport, driver's licence, medical-record numbers and dates of birth next to a label; strict also replaces phone numbers; off keeps credential redaction only. A project's settings can only make this stricter.",
       "options": ["default", "strict", "off"],
       "default": "default"
     },
